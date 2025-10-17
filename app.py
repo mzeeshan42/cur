@@ -1,3 +1,16 @@
+# Patch for Python 3.13 SSL compatibility with eventlet
+import ssl
+import sys
+
+# Monkey patch ssl module to add wrap_socket if it doesn't exist (Python 3.13+)
+if not hasattr(ssl, 'wrap_socket'):
+    def wrap_socket(sock, *args, **kwargs):
+        """Compatibility wrapper for ssl.wrap_socket in Python 3.13+"""
+        context = ssl.SSLContext()
+        return context.wrap_socket(sock, *args, **kwargs)
+    
+    ssl.wrap_socket = wrap_socket
+
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
 import requests
