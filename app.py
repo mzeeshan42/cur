@@ -31,7 +31,7 @@ def fetch_usdc_sol_price():
         klines_response = requests.get(f"{KLINES_URL}?symbol=USDCUSDT&interval=1m&limit=1", timeout=10)
         klines_data = klines_response.json()
         
-        if ticker_response.status_code == 200 and klines_response.status_code == 200:
+        if ticker_response.status_code == 200 and klines_response.status_code == 200 and ticker_data and klines_data:
             # Extract price data
             price_data = {
                 'symbol': ticker_data.get('symbol', 'USDCUSDT'),
@@ -44,18 +44,20 @@ def fetch_usdc_sol_price():
                 'close_price': float(ticker_data.get('lastPrice', 0)),
                 'volume': float(ticker_data.get('volume', 0)),
                 'quote_volume': float(ticker_data.get('quoteVolume', 0)),
-                'count': int(ticker_data.get('count', 0)),
+                'count': int(ticker_data.get('count', 0)) if ticker_data.get('count') is not None else 0,
                 'bid_price': float(ticker_data.get('bidPrice', 0)),
                 'ask_price': float(ticker_data.get('askPrice', 0)),
-                'timestamp': int(ticker_data.get('closeTime', 0)),
-                'datetime': datetime.fromtimestamp(int(ticker_data.get('closeTime', 0)) / 1000).strftime('%Y-%m-%d %H:%M:%S'),
-                'open_time': int(klines_data[0][0]) if klines_data else 0,
-                'close_time': int(klines_data[0][6]) if klines_data else 0
+                'timestamp': int(ticker_data.get('closeTime', 0)) if ticker_data.get('closeTime') is not None else 0,
+                'datetime': datetime.fromtimestamp(int(ticker_data.get('closeTime', 0)) / 1000).strftime('%Y-%m-%d %H:%M:%S') if ticker_data.get('closeTime') is not None else datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'open_time': int(klines_data[0][0]) if klines_data and len(klines_data) > 0 else 0,
+                'close_time': int(klines_data[0][6]) if klines_data and len(klines_data) > 0 else 0
             }
             
             return price_data
         else:
             print(f"API Error: Ticker status {ticker_response.status_code}, Klines status {klines_response.status_code}")
+            print(f"Ticker data: {ticker_data}")
+            print(f"Klines data: {klines_data}")
             return None
             
     except Exception as e:
