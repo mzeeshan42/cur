@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SOL/USDC Trading Platform</title>
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -390,25 +389,94 @@
     </div>
 
     <script>
-        // Initialize Socket.IO connection
-        const socket = io();
+        // Initialize native WebSocket connection
+        let socket = null;
+        let reconnectInterval = null;
+        
+        function connectWebSocket() {
+            socket = new WebSocket('ws://localhost:8765');
+            
+            socket.onopen = function() {
+                console.log('WebSocket connected');
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('statusIndicator').className = 'status-indicator status-online';
+                
+                // Request price history
+                socket.send(JSON.stringify({type: 'request_history'}));
+                updateOrderBook();
+                updateRecentTrades();
+                
+                // Clear reconnect interval
+                if (reconnectInterval) {
+                    clearInterval(reconnectInterval);
+                    reconnectInterval = null;
+                }
+            };
+            
+            socket.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('Received WebSocket data:', data);
+                    
+                    if (data.type === 'history') {
+                        // Handle price history - batch update without animation
+                        data.data.forEach(point => {
+                            updateChart(point, false);
+                        });
+                    } else {
+                        // Handle real-time price updates - immediate processing
+                        updatePriceDisplay(data);
+                        updateChart(data, false); // No animation for real-time
+                        updateOrderBook(data); // Update order book with real-time data
+                        updateLastUpdateTime();
+                        
+                        // If this is deal data, add to recent trades
+                        if (data.deal_price && data.deal_amount && data.deal_side) {
+                            addRecentTrade(data.deal_price, data.deal_amount, data.deal_side);
+                        }
+                    }
+                } catch (e) {
+                    console.error('Error parsing WebSocket message:', e);
+                }
+            };
+            
+            socket.onclose = function() {
+                console.log('WebSocket disconnected');
+                document.getElementById('connectionStatus').textContent = 'Disconnected';
+                document.getElementById('statusIndicator').className = 'status-indicator status-offline';
+                
+                // Attempt to reconnect after 3 seconds
+                if (!reconnectInterval) {
+                    reconnectInterval = setInterval(connectWebSocket, 3000);
+                }
+            };
+            
+            socket.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+        }
+        
+        // Connect on page load
+        connectWebSocket();
         
         // Chart.js configuration
         const ctx = document.getElementById('priceChart').getContext('2d');
         const priceChart = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: [],
                 datasets: [{
-                    label: 'SOL/USDC Price',
+                    label: 'SOL/USDC Price (10Hz)',
                     data: [],
                     borderColor: '#3b82f6',
                     backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                    borderWidth: 2,
+                    borderWidth: 1,
                     fill: true,
-                    tension: 0.4,
+                    tension: 0.1,  // Reduced for better 10Hz performance
                     pointRadius: 0,
-                    pointHoverRadius: 4
+                    pointHoverRadius: 2,
+                    segment: {
+                        borderColor: ctx => ctx.p0.parsed.y > ctx.p1.parsed.y ? '#ef4444' : '#10b981'
+                    }
                 }]
             },
             options: {
@@ -425,15 +493,25 @@
                             color: 'rgba(148, 163, 184, 0.1)'
                         },
                         ticks: {
-                            color: '#94a3b8'
+                            color: '#94a3b8',
+                            maxTicksLimit: 8  // Reduce ticks for 10Hz performance
                         }
                     },
                     x: {
+                        type: 'time',
+                        time: {
+                            unit: 'second',
+                            tooltipFormat: 'HH:mm:ss.SSS',  // Show milliseconds for 10Hz
+                            displayFormats: {
+                                second: 'HH:mm:ss'
+                            }
+                        },
                         grid: {
                             color: 'rgba(148, 163, 184, 0.1)'
                         },
                         ticks: {
-                            color: '#94a3b8'
+                            color: '#94a3b8',
+                            maxTicksLimit: 10  // Reduce ticks for 10Hz performance
                         }
                     }
                 },
@@ -450,7 +528,7 @@
                     }
                 },
                 animation: {
-                    duration: 300
+                    duration: 0
                 }
             }
         });
@@ -483,32 +561,15 @@
         ];
 
         // Connection status management
-        socket.on('connect', function() {
-            document.getElementById('connectionStatus').textContent = 'Connected';
-            document.getElementById('statusIndicator').className = 'status-indicator status-online';
-            socket.emit('request_history');
-            updateOrderBook();
-            updateRecentTrades();
-        });
-
-        socket.on('disconnect', function() {
-            document.getElementById('connectionStatus').textContent = 'Disconnected';
-            document.getElementById('statusIndicator').className = 'status-indicator status-offline';
-        });
-
-        // Handle price updates
-        socket.on('price_update', function(data) {
-            updatePriceDisplay(data);
-            updateChart(data);
-            updateLastUpdateTime();
-        });
-
-        // Handle price history
-        socket.on('price_history', function(history) {
-            history.forEach(data => {
-                updateChart(data, false);
-            });
-        });
+        function updateConnectionStatus() {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('statusIndicator').className = 'status-indicator status-online';
+            } else {
+                document.getElementById('connectionStatus').textContent = 'Disconnected';
+                document.getElementById('statusIndicator').className = 'status-indicator status-offline';
+            }
+        }
 
         function updatePriceDisplay(data) {
             document.getElementById('currentPrice').textContent = '$' + parseFloat(data.price).toFixed(2);
@@ -544,32 +605,67 @@
             document.getElementById('openPrice').textContent = '$' + parseFloat(data.open_price).toFixed(2);
         }
 
-        function updateChart(data, animate = true) {
-            const now = new Date(data.timestamp);
-            const timeLabel = now.toLocaleTimeString();
+        function updateChart(data, animate = false) {
+            // High-frequency chart update for 10Hz data
+            const timeMs = (data.server_time || data.timestamp || Date.now());
+            const point = { x: timeMs, y: parseFloat(data.price) };
             
-            priceChart.data.labels.push(timeLabel);
-            priceChart.data.datasets[0].data.push(parseFloat(data.price));
+            const dataset = priceChart.data.datasets[0].data;
+            dataset.push(point);
             
-            // Keep only last 100 data points
-            if (priceChart.data.labels.length > 100) {
-                priceChart.data.labels.shift();
-                priceChart.data.datasets[0].data.shift();
+            // Keep only last 500 data points for 10Hz performance (50 seconds of data)
+            if (dataset.length > 500) {
+                dataset.splice(0, dataset.length - 500);
             }
             
-            if (animate) {
-                priceChart.update('active');
-            } else {
-                priceChart.update('none');
+            // Update chart immediately without animation for 10Hz real-time data
+            priceChart.update('none');
+            
+            // Log frequency info if available
+            if (data.frequency) {
+                console.log(`Chart updated at ${data.frequency} - Price: $${data.price}`);
             }
         }
 
-        function updateOrderBook() {
+        function updateOrderBook(data = null) {
             const tbody = document.getElementById('orderBookBody');
             tbody.innerHTML = '';
             
+            // Use current price data if available, otherwise use mock data
+            let currentPrice = 185.0; // Default fallback
+            let bidPrice = 184.95;
+            let askPrice = 185.05;
+            
+            if (data && data.price) {
+                currentPrice = parseFloat(data.price);
+                bidPrice = parseFloat(data.bid_price) || currentPrice - 0.05;
+                askPrice = parseFloat(data.ask_price) || currentPrice + 0.05;
+            }
+            
+            // Generate realistic order book levels around current price
+            const orderBookLevels = 5;
+            const priceStep = 0.01;
+            
+            // Generate asks (above current price)
+            const asks = [];
+            for (let i = 0; i < orderBookLevels; i++) {
+                const price = askPrice + (i * priceStep);
+                const amount = Math.random() * 1000 + 100; // Random amount between 100-1100
+                const total = price * amount;
+                asks.push({ price, amount, total });
+            }
+            
+            // Generate bids (below current price)
+            const bids = [];
+            for (let i = 0; i < orderBookLevels; i++) {
+                const price = bidPrice - (i * priceStep);
+                const amount = Math.random() * 1000 + 100; // Random amount between 100-1100
+                const total = price * amount;
+                bids.push({ price, amount, total });
+            }
+            
             // Add asks (descending order)
-            mockOrderBook.asks.slice().reverse().forEach(order => {
+            asks.slice().reverse().forEach(order => {
                 const row = document.createElement('tr');
                 row.className = 'ask-row';
                 row.innerHTML = `
@@ -581,7 +677,7 @@
             });
             
             // Add bids
-            mockOrderBook.bids.forEach(order => {
+            bids.forEach(order => {
                 const row = document.createElement('tr');
                 row.className = 'bid-row';
                 row.innerHTML = `
@@ -593,11 +689,38 @@
             });
         }
 
+        // Store recent trades in memory
+        let recentTrades = [];
+        
+        function addRecentTrade(price, amount, side) {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString();
+            
+            const trade = {
+                time: timeStr,
+                price: parseFloat(price),
+                amount: parseFloat(amount),
+                side: side
+            };
+            
+            recentTrades.unshift(trade); // Add to beginning
+            
+            // Keep only last 10 trades
+            if (recentTrades.length > 10) {
+                recentTrades = recentTrades.slice(0, 10);
+            }
+            
+            updateRecentTrades();
+        }
+        
         function updateRecentTrades() {
             const tbody = document.getElementById('tradesBody');
             tbody.innerHTML = '';
             
-            mockTrades.forEach(trade => {
+            // Use real trades if available, otherwise use mock data
+            const tradesToShow = recentTrades.length > 0 ? recentTrades : mockTrades;
+            
+            tradesToShow.forEach(trade => {
                 const row = document.createElement('tr');
                 const sideClass = trade.side === 'buy' ? 'trade-buy' : 'trade-sell';
                 row.innerHTML = `
