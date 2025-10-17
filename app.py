@@ -1,16 +1,3 @@
-# Patch for Python 3.13 SSL compatibility with eventlet
-import ssl
-import sys
-
-# Monkey patch ssl module to add wrap_socket if it doesn't exist (Python 3.13+)
-if not hasattr(ssl, 'wrap_socket'):
-    def wrap_socket(sock, *args, **kwargs):
-        """Compatibility wrapper for ssl.wrap_socket in Python 3.13+"""
-        context = ssl.SSLContext()
-        return context.wrap_socket(sock, *args, **kwargs)
-    
-    ssl.wrap_socket = wrap_socket
-
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
 import requests
@@ -21,7 +8,10 @@ from datetime import datetime
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here'
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Force threading async mode to avoid incompatibilities with eventlet on
+# newer Python versions (prevents engineio from importing eventlet's
+# green ssl which expects ssl.wrap_socket).
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # MEXC API endpoints
 MEXC_BASE_URL = "https://api.mexc.com"
@@ -37,17 +27,17 @@ def fetch_usdc_sol_price():
     """Fetch USDC/SOL price data from MEXC API"""
     try:
         # Fetch 24hr ticker data
-        ticker_response = requests.get(f"{TICKER_URL}?symbol=USDCUSDT", timeout=10)
+        ticker_response = requests.get(f"{TICKER_URL}?symbol=SOLUSDC", timeout=10)
         ticker_data = ticker_response.json()
         
         # Fetch klines for additional data
-        klines_response = requests.get(f"{KLINES_URL}?symbol=USDCUSDT&interval=1m&limit=1", timeout=10)
+        klines_response = requests.get(f"{KLINES_URL}?symbol=SOLUSDC&interval=1m&limit=1", timeout=10)
         klines_data = klines_response.json()
         
         if ticker_response.status_code == 200 and klines_response.status_code == 200 and ticker_data and klines_data:
             # Extract price data
             price_data = {
-                'symbol': ticker_data.get('symbol', 'USDCUSDT'),
+                'symbol': ticker_data.get('symbol', 'SOLUSDC'),
                 'price': float(ticker_data.get('lastPrice', 0)),
                 'price_change': float(ticker_data.get('priceChange', 0)),
                 'price_change_percent': float(ticker_data.get('priceChangePercent', 0)),
